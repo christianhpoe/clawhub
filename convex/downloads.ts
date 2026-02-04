@@ -41,16 +41,21 @@ export const downloadZip = httpAction(async (ctx, request) => {
     return new Response('Version not available', { status: 410 })
   }
 
-  const files: Record<string, Uint8Array> = {}
-  for (const file of version.files) {
+  const sortedFiles = [...version.files].sort((a, b) => a.path.localeCompare(b.path))
+  const fixedDate = new Date('1980-01-01T00:00:00Z')
+
+  type ZipInput = Record<string, Uint8Array | [Uint8Array, { mtime?: Date }]>
+  const zipData: ZipInput = {}
+
+  for (const file of sortedFiles) {
     const blob = await ctx.storage.get(file.storageId)
     if (!blob) continue
     const buffer = new Uint8Array(await blob.arrayBuffer())
-    files[file.path] = buffer
+    zipData[file.path] = [buffer, { mtime: fixedDate }]
   }
 
-  const zipData = zipSync(files, { level: 6 })
-  const zipArray = Uint8Array.from(zipData)
+  const zipped = zipSync(zipData, { level: 6 })
+  const zipArray = Uint8Array.from(zipped)
   const zipBlob = new Blob([zipArray], { type: 'application/zip' })
 
   await ctx.runMutation(api.downloads.increment, { skillId: skill._id })
