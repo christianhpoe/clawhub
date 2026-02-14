@@ -3,6 +3,67 @@ import type { Doc } from './_generated/dataModel'
 import { mutation, query } from './_generated/server'
 import { assertRole, requireUser } from './lib/access'
 
+async function addHandler(
+  ctx: import('./_generated/server').MutationCtx,
+  args: { skillId: import('./_generated/dataModel').Id<'skills'>; body: string },
+) {
+  const { userId } = await requireUser(ctx)
+  const body = args.body.trim()
+  if (!body) throw new Error('Comment body required')
+
+  const skill = await ctx.db.get(args.skillId)
+  if (!skill) throw new Error('Skill not found')
+
+  await ctx.db.insert('comments', {
+    skillId: args.skillId,
+    userId,
+    body,
+    createdAt: Date.now(),
+    softDeletedAt: undefined,
+    deletedBy: undefined,
+  })
+
+  await ctx.db.patch(skill._id, {
+    stats: { ...skill.stats, comments: skill.stats.comments + 1 },
+  })
+}
+
+async function removeHandler(
+  ctx: import('./_generated/server').MutationCtx,
+  args: { commentId: import('./_generated/dataModel').Id<'comments'> },
+) {
+  const { user } = await requireUser(ctx)
+  const comment = await ctx.db.get(args.commentId)
+  if (!comment) throw new Error('Comment not found')
+  if (comment.softDeletedAt) return
+
+  const isOwner = comment.userId === user._id
+  if (!isOwner) {
+    assertRole(user, ['admin', 'moderator'])
+  }
+
+  await ctx.db.patch(comment._id, {
+    softDeletedAt: Date.now(),
+    deletedBy: user._id,
+  })
+
+  const skill = await ctx.db.get(comment.skillId)
+  if (skill) {
+    await ctx.db.patch(skill._id, {
+      stats: { ...skill.stats, comments: Math.max(0, skill.stats.comments - 1) },
+    })
+  }
+
+  await ctx.db.insert('auditLogs', {
+    actorUserId: user._id,
+    action: 'comment.delete',
+    targetType: 'comment',
+    targetId: comment._id,
+    metadata: { skillId: comment.skillId },
+    createdAt: Date.now(),
+  })
+}
+
 export const listBySkill = query({
   args: { skillId: v.id('skills'), limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
@@ -25,61 +86,15 @@ export const listBySkill = query({
 
 export const add = mutation({
   args: { skillId: v.id('skills'), body: v.string() },
-  handler: async (ctx, args) => {
-    const { userId } = await requireUser(ctx)
-    const body = args.body.trim()
-    if (!body) throw new Error('Comment body required')
-
-    const skill = await ctx.db.get(args.skillId)
-    if (!skill) throw new Error('Skill not found')
-
-    await ctx.db.insert('comments', {
-      skillId: args.skillId,
-      userId,
-      body,
-      createdAt: Date.now(),
-      softDeletedAt: undefined,
-      deletedBy: undefined,
-    })
-
-    await ctx.db.patch(skill._id, {
-      stats: { ...skill.stats, comments: skill.stats.comments + 1 },
-    })
-  },
+  handler: addHandler,
 })
 
 export const remove = mutation({
   args: { commentId: v.id('comments') },
-  handler: async (ctx, args) => {
-    const { user } = await requireUser(ctx)
-    const comment = await ctx.db.get(args.commentId)
-    if (!comment) throw new Error('Comment not found')
-    if (comment.softDeletedAt) return
-
-    const isOwner = comment.userId === user._id
-    if (!isOwner) {
-      assertRole(user, ['admin', 'moderator'])
-    }
-
-    await ctx.db.patch(comment._id, {
-      softDeletedAt: Date.now(),
-      deletedBy: user._id,
-    })
-
-    const skill = await ctx.db.get(comment.skillId)
-    if (skill) {
-      await ctx.db.patch(skill._id, {
-        stats: { ...skill.stats, comments: Math.max(0, skill.stats.comments - 1) },
-      })
-    }
-
-    await ctx.db.insert('auditLogs', {
-      actorUserId: user._id,
-      action: 'comment.delete',
-      targetType: 'comment',
-      targetId: comment._id,
-      metadata: { skillId: comment.skillId },
-      createdAt: Date.now(),
-    })
-  },
+  handler: removeHandler,
 })
+
+export const __test = {
+  addHandler,
+  removeHandler,
+}
