@@ -1,4 +1,4 @@
-import { isTextContentType, TEXT_FILE_EXTENSION_SET } from 'clawdhub-schema'
+import { isTextContentType, TEXT_FILE_EXTENSION_SET } from 'clawhub-schema'
 
 export async function uploadFile(uploadUrl: string, file: File) {
   const response = await fetch(uploadUrl, {
@@ -84,8 +84,12 @@ export async function readText(blob: Blob) {
   if (typeof FileReader !== 'undefined' && blob instanceof Blob) {
     return new Promise<string>((resolve, reject) => {
       const reader = new FileReader()
-      reader.onerror = () => reject(reader.error ?? new Error('Could not read blob.'))
-      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
+      reader.addEventListener('error', () => {
+        reject(reader.error ?? new Error('Could not read blob.'))
+      })
+      reader.addEventListener('load', () => {
+        resolve(typeof reader.result === 'string' ? reader.result : '')
+      })
       reader.readAsText(blob)
     })
   }
